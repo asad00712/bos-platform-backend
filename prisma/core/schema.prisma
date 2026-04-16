@@ -1,0 +1,484 @@
+// =======================================================================
+// BOS Core DB — Global `public` schema
+//
+// Tenant-independent, platform-wide data:
+//   - Tenants & plans
+//   - User identity + memberships (platform / tenant)
+//   - Platform RBAC (BOS-employee roles/permissions)
+//   - Auth artifacts (sessions, refresh tokens, invites, resets, verifications)
+//   - Impersonation audit
+//   - Feature flags
+//
+// Per-tenant business data lives in `tenant_{uuid}` schemas inside the same
+// `bos_core` database, modelled separately by prisma/tenant-template/schema.prisma.
+//
+// Generated client: node_modules/@bos-prisma/core
+// =======================================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/@bos-prisma/core"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["public"]
+}
+
+// =======================================================================
+// ENUMS
+// =======================================================================
+
+enum UserStatus {
+  invited
+  pending_verification
+  active
+  locked
+  suspended
+  deleted
+
+  @@schema("public")
+}
+
+enum TenantStatus {
+  provisioning
+  active
+  suspended
+  deleted
+
+  @@schema("public")
+}
+
+enum VerticalType {
+  medical
+  law
+  restaurant
+  school
+  gym
+
+  @@schema("public")
+}
+
+enum TenantMembershipStatus {
+  invited
+  active
+  suspended
+  left
+
+  @@schema("public")
+}
+
+enum SessionScope {
+  tenant
+  platform
+  impersonation
+
+  @@schema("public")
+}
+
+enum SessionEndReason {
+  logout
+  expired
+  revoked_by_admin
+  password_changed
+  token_reuse_detected
+  user_suspended
+  tenant_suspended
+  impersonation_ended
+
+  @@schema("public")
+}
+
+// =======================================================================
+// TENANT REGISTRY
+// =======================================================================
+
+/// Pricing plans available on the platform. Seeded at bootstrap.
+model TenantPlan {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug         String   @unique // e.g. "free", "starter", "pro", "enterprise"
+  name         String
+  description  String?
+  priceMonthly Decimal  @default(0) @db.Decimal(10, 2)
+  priceYearly  Decimal  @default(0) @db.Decimal(10, 2)
+  currency     String   @default("USD") @db.Char(3)
+  /// Feature entitlements as JSON — e.g., { "whatsapp": true, "ai_chatbot": false }
+  features     Json     @default("{}")
+  maxUsers     Int?
+  maxBranches  Int?
+  /// Storage cap in bytes; null = unlimited
+  maxStorage   BigInt?
+  isActive     Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @updatedAt @db.Timestamptz
+
+  tenants Tenant[]
+
+  @@index([isActive, sortOrder])
+  @@schema("public")
+}
+
+/// Every customer organization using BOS is a Tenant. Each gets an isolated
+/// `tenant_{uuid}` schema inside `bos_core` for business data.
+model Tenant {
+  id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String
+  slug            String       @unique // URL-safe, e.g. "acme-clinic"
+  vertical        VerticalType?
+  status          TenantStatus @default(provisioning)
+  /// Physical Postgres schema name, e.g. "tenant_a1b2c3d4"
+  schemaName      String       @unique
+  planId          String       @db.Uuid
+  /// User who created the tenant (becomes the first owner)
+  ownerUserId     String       @db.Uuid
+  /// Custom subdomain for white-label deployments; nullable for default
+  customDomain    String?      @unique
+  locale          String       @default("en-US")
+  timezone        String       @default("UTC")
+  /// Tenant-specific metadata (branding, custom settings)
+  metadata        Json         @default("{}")
+  provisionedAt   DateTime?    @db.Timestamptz
+  suspendedAt     DateTime?    @db.Timestamptz
+  suspendedReason String?
+  deletedAt       DateTime?    @db.Timestamptz
+  createdAt       DateTime     @default(now()) @db.Timestamptz
+  updatedAt       DateTime     @updatedAt @db.Timestamptz
+
+  plan                  TenantPlan             @relation(fields: [planId], references: [id])
+  memberships           TenantMembership[]
+  sessions              Session[]
+  userInvites           UserInvite[]
+  impersonationSessions ImpersonationSession[]
+  featureFlags          FeatureFlag[]
+
+  @@index([status])
+  @@index([vertical])
+  @@index([ownerUserId])
+  @@schema("public")
+}
+
+// =======================================================================
+// USERS & MEMBERSHIPS
+// =======================================================================
+
+/// Pure identity record. A user can belong to many tenants and/or be platform staff.
+model User {
+  id                   String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                String     @unique @db.Citext
+  emailVerified        Boolean    @default(false)
+  /// bcrypt hash (cost 12). Null for SSO-only users until they set a password.
+  passwordHash         String?
+  firstName            String?
+  lastName             String?
+  avatarUrl            String?
+  phone                String?
+  locale               String?
+  timezone             String?
+  status               UserStatus @default(pending_verification)
+  /// TOTP secret (encrypted at app layer before persisting — see auth-service).
+  twoFactorEnabled     Boolean    @default(false)
+  twoFactorSecret      String?
+  /// bcrypt-hashed backup codes, single-use
+  twoFactorBackupCodes String[]
+  lockedUntil          DateTime?  @db.Timestamptz
+  lastLoginAt          DateTime?  @db.Timestamptz
+  lastLoginIp          String?
+  deletedAt            DateTime?  @db.Timestamptz
+  createdAt            DateTime   @default(now()) @db.Timestamptz
+  updatedAt            DateTime   @updatedAt @db.Timestamptz
+
+  platformMemberships    PlatformMembership[]
+  tenantMemberships      TenantMembership[]
+  sessions               Session[]
+  refreshTokens          RefreshToken[]
+  invitesReceived        UserInvite[]           @relation("InviteReceiver")
+  invitesSent            UserInvite[]           @relation("InviteSender")
+  passwordResets         PasswordReset[]
+  emailVerifications     EmailVerification[]
+  impersonationsAsActor  ImpersonationSession[] @relation("ImpersonationActor")
+  impersonationsAsTarget ImpersonationSession[] @relation("ImpersonationTarget")
+
+  @@index([status])
+  @@index([createdAt])
+  @@schema("public")
+}
+
+/// Link between a User and a Platform Role (BOS employees only).
+/// A user with any row here has platform access.
+model PlatformMembership {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String    @db.Uuid
+  platformRoleId  String    @db.Uuid
+  /// Who granted this membership (another platform user)
+  grantedByUserId String?   @db.Uuid
+  revokedAt       DateTime? @db.Timestamptz
+  revokedReason   String?
+  createdAt       DateTime  @default(now()) @db.Timestamptz
+  updatedAt       DateTime  @updatedAt @db.Timestamptz
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platformRole PlatformRole @relation(fields: [platformRoleId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, platformRoleId])
+  @@index([userId])
+  @@index([platformRoleId])
+  @@schema("public")
+}
+
+/// Link between a User and a Tenant. Actual role assignments (owner/admin/manager/etc.)
+/// live per-tenant in `tenant_{uuid}.user_branch_memberships` — this is just the
+/// top-level "is this user part of this tenant" link.
+model TenantMembership {
+  id         String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String                 @db.Uuid
+  tenantId   String                 @db.Uuid
+  status     TenantMembershipStatus @default(invited)
+  /// When user accepted the invite (or signed up as owner)
+  joinedAt   DateTime?              @db.Timestamptz
+  /// When user left the tenant or was removed
+  leftAt     DateTime?              @db.Timestamptz
+  leftReason String?
+  createdAt  DateTime               @default(now()) @db.Timestamptz
+  updatedAt  DateTime               @updatedAt @db.Timestamptz
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tenantId])
+  @@index([userId, status])
+  @@index([tenantId, status])
+  @@schema("public")
+}
+
+// =======================================================================
+// PLATFORM RBAC (BOS-employee roles)
+// =======================================================================
+
+/// Seeded roles: super_admin, platform_support, platform_billing,
+/// platform_engineer, marketplace_moderator. Immutable.
+model PlatformRole {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug        String   @unique
+  name        String
+  description String?
+  /// Seeded roles cannot be deleted
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @updatedAt @db.Timestamptz
+
+  memberships     PlatformMembership[]
+  rolePermissions PlatformRolePermission[]
+
+  @@schema("public")
+}
+
+/// Seeded permissions, immutable. Format: platform:<resource>:<action>
+model PlatformPermission {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug        String   @unique // e.g. "platform:tenants:suspend"
+  resource    String // e.g. "tenants"
+  action      String // e.g. "suspend"
+  description String
+  createdAt   DateTime @default(now()) @db.Timestamptz
+
+  rolePermissions PlatformRolePermission[]
+
+  @@unique([resource, action])
+  @@schema("public")
+}
+
+model PlatformRolePermission {
+  platformRoleId       String   @db.Uuid
+  platformPermissionId String   @db.Uuid
+  createdAt            DateTime @default(now()) @db.Timestamptz
+
+  role       PlatformRole       @relation(fields: [platformRoleId], references: [id], onDelete: Cascade)
+  permission PlatformPermission @relation(fields: [platformPermissionId], references: [id], onDelete: Cascade)
+
+  @@id([platformRoleId, platformPermissionId])
+  @@index([platformPermissionId])
+  @@schema("public")
+}
+
+// =======================================================================
+// AUTH SESSIONS & TOKENS
+// =======================================================================
+
+/// Active user session. Created on login, ended on logout/expiry/revocation.
+model Session {
+  id             String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String            @db.Uuid
+  scope          SessionScope
+  /// Null for platform sessions; set for tenant and impersonation scopes.
+  tenantId       String?           @db.Uuid
+  /// Current active branch (tenant scope only); nullable for tenant-wide users.
+  activeBranchId String?           @db.Uuid
+  /// Device + browser info as JSON ({ os, browser, type })
+  deviceInfo     Json              @default("{}")
+  ipAddress      String?
+  userAgent      String?
+  country        String?
+  createdAt      DateTime          @default(now()) @db.Timestamptz
+  lastActiveAt   DateTime          @default(now()) @db.Timestamptz
+  endedAt        DateTime?         @db.Timestamptz
+  endReason      SessionEndReason?
+
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant        Tenant?               @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  refreshTokens RefreshToken[]
+  impersonation ImpersonationSession?
+
+  @@index([userId, endedAt])
+  @@index([tenantId])
+  @@index([lastActiveAt])
+  @@schema("public")
+}
+
+/// Refresh tokens are opaque UUIDs stored hashed. Rotation is tracked via familyId;
+/// reuse of a consumed token triggers family-wide revocation (reuse detection).
+model RefreshToken {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// SHA-256 hash of the raw token; never store plaintext
+  tokenHash     String    @unique
+  userId        String    @db.Uuid
+  sessionId     String    @db.Uuid
+  /// All tokens in a rotation chain share the same familyId
+  familyId      String    @db.Uuid
+  /// Previous token in the chain; null for the initial token
+  parentId      String?   @db.Uuid
+  expiresAt     DateTime  @db.Timestamptz
+  /// Set when this token is rotated (used exactly once); reuse after this = breach
+  usedAt        DateTime? @db.Timestamptz
+  revokedAt     DateTime? @db.Timestamptz
+  revokedReason String?
+  createdAt     DateTime  @default(now()) @db.Timestamptz
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([sessionId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@schema("public")
+}
+
+/// Team-member invite (48h TTL per BRD FR-02-06). User row is created at invite
+/// time with status=invited; status flips to active when invite is accepted.
+model UserInvite {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tokenHash       String    @unique
+  /// The invited user (created with status=invited at invite time)
+  userId          String    @db.Uuid
+  tenantId        String    @db.Uuid
+  /// Who sent the invite
+  invitedByUserId String    @db.Uuid
+  /// Which role to assign on accept (refers to tenant_xyz.roles.id — cross-schema, no FK)
+  roleId          String    @db.Uuid
+  /// Which branch (nullable for tenant-wide roles; refers to tenant_xyz.branches.id)
+  branchId        String?   @db.Uuid
+  email           String    @db.Citext
+  expiresAt       DateTime  @db.Timestamptz
+  acceptedAt      DateTime? @db.Timestamptz
+  revokedAt       DateTime? @db.Timestamptz
+  createdAt       DateTime  @default(now()) @db.Timestamptz
+
+  user      User   @relation("InviteReceiver", fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy User   @relation("InviteSender", fields: [invitedByUserId], references: [id], onDelete: Restrict)
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([email])
+  @@index([expiresAt])
+  @@schema("public")
+}
+
+/// Password reset tokens (1h TTL). Requested from /auth/forgot-password.
+model PasswordReset {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tokenHash   String    @unique
+  userId      String    @db.Uuid
+  requestedIp String?
+  expiresAt   DateTime  @db.Timestamptz
+  usedAt      DateTime? @db.Timestamptz
+  createdAt   DateTime  @default(now()) @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@schema("public")
+}
+
+/// Email verification tokens (24h TTL). Issued on signup and email change.
+model EmailVerification {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tokenHash  String    @unique
+  userId     String    @db.Uuid
+  /// The email being verified (may differ from user.email when updating email)
+  email      String    @db.Citext
+  expiresAt  DateTime  @db.Timestamptz
+  verifiedAt DateTime? @db.Timestamptz
+  createdAt  DateTime  @default(now()) @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@schema("public")
+}
+
+// =======================================================================
+// IMPERSONATION & FEATURE FLAGS
+// =======================================================================
+
+/// Audit record of every platform-staff impersonation of a tenant user.
+/// Required reason, tenant admin is notified on start.
+model ImpersonationSession {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// The platform user doing the impersonating
+  impersonatedByUserId String    @db.Uuid
+  /// The target tenant user being impersonated
+  actualUserId         String    @db.Uuid
+  tenantId             String    @db.Uuid
+  /// One-to-one with the sessions table row created for this impersonation
+  sessionId            String    @unique @db.Uuid
+  reason               String
+  startedAt            DateTime  @default(now()) @db.Timestamptz
+  endedAt              DateTime? @db.Timestamptz
+  /// exited | expired | revoked_by_admin
+  endReason            String?
+  createdAt            DateTime  @default(now()) @db.Timestamptz
+
+  impersonatedBy User    @relation("ImpersonationActor", fields: [impersonatedByUserId], references: [id], onDelete: Restrict)
+  actualUser     User    @relation("ImpersonationTarget", fields: [actualUserId], references: [id], onDelete: Cascade)
+  tenant         Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  session        Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([impersonatedByUserId])
+  @@index([actualUserId])
+  @@index([tenantId])
+  @@index([startedAt])
+  @@schema("public")
+}
+
+/// Per-tenant feature toggles. Null tenantId = global flag (all tenants).
+/// Examples: "whatsapp_enabled", "ai_chatbot_beta", "new_billing_flow".
+model FeatureFlag {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Null = global flag
+  tenantId  String?  @db.Uuid
+  flagKey   String
+  enabled   Boolean  @default(false)
+  /// Optional configuration payload for the flag (e.g., rollout percent)
+  metadata  Json?
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, flagKey])
+  @@index([flagKey])
+  @@schema("public")
+}

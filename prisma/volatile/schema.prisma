@@ -1,0 +1,227 @@
+// =======================================================================
+// BOS Volatile DB — Ephemeral High-Volume Data
+//
+// Shared tables (not schema-per-tenant) with `tenantId` column + RLS.
+// Partitioned monthly by occurredAt/createdAt. Stale partitions auto-dropped
+//
+//   Schema `messaging`: outbound_messages (retention 90 days)
+// via pg_partman extension (or a scheduled cron job).
+//
+//   Schema `audit`:    audit_logs (retention 100 days)
+//   Schema `campaign`: campaign_recipients, campaign_events (retention 30 days)
+//
+// NO foreign keys across DBs. Columns like `tenantId`, `campaignId`,
+// `recipientId` are soft refs to rows in `bos_core`; integrity is enforced
+// at the application layer.
+//
+// Generated client: node_modules/@bos-prisma/volatile
+// =======================================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/@bos-prisma/volatile"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["audit", "campaign", "messaging"]
+}
+
+// =======================================================================
+// AUDIT SCHEMA (retention 100 days)
+// =======================================================================
+
+/// Append-only audit trail for every state-changing action in BOS.
+///
+/// Written by the Audit module (inside CRM Core) that consumes events from
+/// Redis Streams. Every business module publishes events that are logged
+/// here — services never write to this table directly on the request path.
+///
+/// Partitioned by month on `occurredAt`. Partitions older than 100 days are
+/// dropped by pg_partman. Permanent compliance archive (for regulated
+/// industries) is done via daily Parquet export to R2 (Phase 2).
+model AuditLog {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Soft ref → bos_core.public.tenants.id. Null only for platform-level actions.
+  tenantId             String?  @db.Uuid
+  /// Soft ref → bos_core.public.users.id. Null for system/cron actions.
+  actorUserId          String?  @db.Uuid
+  actorIp              String?
+  actorUserAgent       String?
+  /// Event type that triggered this log, e.g., "contact.created", "invoice.paid"
+  action               String
+  /// Resource category, e.g., "contact", "invoice", "appointment"
+  resourceType         String
+  /// Specific resource ID affected; null for non-resource actions (login, etc.)
+  resourceId           String?  @db.Uuid
+  /// State of the resource BEFORE the change (null for creates/reads)
+  beforeState          Json?
+  /// State of the resource AFTER the change (null for deletes/reads)
+  afterState           Json?
+  /// Additional context (request metadata, reason codes, etc.)
+  metadata             Json?
+  /// Links this log entry to the originating user request for tracing
+  correlationId        String   @db.Uuid
+  /// Event that caused this action (for event-chain tracing)
+  causationId          String?  @db.Uuid
+  /// If action happened during impersonation, soft ref → impersonator user
+  impersonatedByUserId String?  @db.Uuid
+  occurredAt           DateTime @default(now()) @db.Timestamptz
+
+  @@index([tenantId, occurredAt])
+  @@index([actorUserId, occurredAt])
+  @@index([resourceType, resourceId])
+  @@index([action, occurredAt])
+  @@index([correlationId])
+  @@schema("audit")
+}
+
+// =======================================================================
+// CAMPAIGN SCHEMA (retention 30 days)
+// =======================================================================
+
+/// Per-recipient status for a campaign send. Created by the Campaign Service's
+/// Layer 2 batcher (batches of 500); updated by Layer 3 senders and provider
+/// delivery webhooks.
+///
+/// Aggregate counts (sent_count, opened_count, etc.) are atomically maintained
+/// in `bos_core.tenant_{uuid}.campaigns` so historical stats outlive the
+/// 30-day partition drop.
+model CampaignRecipient {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Soft ref → bos_core.public.tenants.id
+  tenantId          String    @db.Uuid
+  /// Soft ref → bos_core.tenant_xyz.campaigns.id
+  campaignId        String    @db.Uuid
+  /// Soft ref → bos_core.tenant_xyz.contacts.id
+  contactId         String?   @db.Uuid
+  email             String?
+  phone             String?
+  /// queued | sent | delivered | failed | bounced | unsubscribed | opened | clicked
+  status            String
+  /// ID returned by the downstream provider (SendGrid, Twilio, etc.)
+  providerMessageId String?
+  /// Provider error code or free-text reason for failed/bounced sends
+  errorReason       String?
+  /// Which batch (0-indexed) this recipient was part of — helps debug partial failures
+  batchIndex        Int
+  sentAt            DateTime? @db.Timestamptz
+  deliveredAt       DateTime? @db.Timestamptz
+  failedAt          DateTime? @db.Timestamptz
+  createdAt         DateTime  @default(now()) @db.Timestamptz
+  updatedAt         DateTime  @updatedAt @db.Timestamptz
+
+  events CampaignEvent[]
+
+  @@index([tenantId, campaignId, status])
+  @@index([tenantId, createdAt])
+  @@index([campaignId, status])
+  @@schema("campaign")
+}
+
+/// Engagement event for a campaign recipient (open, click, bounce, etc.).
+/// Driven by provider webhooks handled by the Webhook module.
+model CampaignEvent {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Soft ref → bos_core.public.tenants.id
+  tenantId    String   @db.Uuid
+  /// Soft ref → bos_core.tenant_xyz.campaigns.id
+  campaignId  String   @db.Uuid
+  recipientId String?  @db.Uuid
+  /// open | click | bounce | unsubscribe | spam_report | delivered | failed
+  eventType   String
+  /// For click events — the link that was clicked
+  linkUrl     String?
+  /// For bounce events — "hard" | "soft"
+  bounceType  String?
+  ipAddress   String?
+  userAgent   String?
+  /// Additional provider-specific context (mail client, device, region, etc.)
+  metadata    Json?
+  occurredAt  DateTime @default(now()) @db.Timestamptz
+
+  recipient CampaignRecipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, campaignId, occurredAt])
+  @@index([tenantId, campaignId, eventType])
+  @@index([recipientId])
+  @@index([eventType, occurredAt])
+  @@schema("campaign")
+}
+
+// =======================================================================
+// MESSAGING SCHEMA (retention 90 days)
+// =======================================================================
+
+/// Platform-internal record of every outbound message (email, SMS, push).
+///
+/// Written by the mailer worker after each send attempt. Never exposed to
+/// tenants — this is operational/monitoring data for the platform team.
+///
+/// Soft refs (no FK constraints across DBs):
+///   tenantId         → bos_core.public.tenants.id   (null = platform-level)
+///   triggeredByUserId → bos_core.public.users.id     (null = system/cron)
+///
+/// Retention: 90 days. Stale rows purged by a scheduled cron job.
+model OutboundMessage {
+  id                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Soft ref → tenants.id. Null for platform-level messages (e.g. verify-email before tenant exists).
+  tenantId            String?         @db.Uuid
+  channel             MessageChannel  @default(email)
+  messageType         MessageType
+  recipientEmail      String?
+  recipientPhone      String?
+  /// Email subject line — null for SMS/push
+  subject             String?
+  /// Template identifier, e.g. "auth.verify-email", "auth.password-reset"
+  templateId          String
+  /// Variables passed to the template renderer (sanitized — no secrets)
+  templateData        Json            @default("{}")
+  status              MessageStatus   @default(queued)
+  /// Provider-assigned message ID (e.g. Resend message ID) — set after successful send
+  providerId          String?
+  /// Last error message if status = failed
+  errorMessage        String?
+  /// Number of send attempts so far (max configured in BullMQ job options)
+  retryCount          Int             @default(0)
+  /// Soft ref → users.id. Null for system-triggered messages (cron, webhooks)
+  triggeredByUserId   String?         @db.Uuid
+  /// Correlation ID from the originating HTTP request — for end-to-end tracing
+  correlationId       String?
+  scheduledAt         DateTime?       @db.Timestamptz
+  sentAt              DateTime?       @db.Timestamptz
+  createdAt           DateTime        @default(now()) @db.Timestamptz
+  updatedAt           DateTime        @updatedAt @db.Timestamptz
+
+  @@index([tenantId, createdAt])
+  @@index([status, createdAt])
+  @@index([templateId, createdAt])
+  @@index([triggeredByUserId, createdAt])
+  @@schema("messaging")
+}
+
+enum MessageChannel {
+  email
+  sms
+  push
+
+  @@schema("messaging")
+}
+
+enum MessageType {
+  transactional
+  campaign
+  notification
+
+  @@schema("messaging")
+}
+
+enum MessageStatus {
+  queued
+  sending
+  sent
+  failed
+  cancelled
+
+  @@schema("messaging")
+}

@@ -1,0 +1,116 @@
+name: bos-dev
+
+services:
+  # ---------------------------------------------------------------------------
+  # Redis 1 — Operational
+  # Handles: JWT revocation, rate limiting, sessions, pub/sub, cache
+  # Persistence: AOF (appendonly) — data must survive restarts
+  # Eviction: noeviction — never silently drop keys
+  # ---------------------------------------------------------------------------
+  redis-operational:
+    image: redis:7-alpine
+    container_name: bos-redis-operational
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy noeviction
+    volumes:
+      - redis-operational-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - bos-net
+
+  # ---------------------------------------------------------------------------
+  # Redis 2 — Transactional Queue
+  # Handles: auth emails, notifications, webhooks, AI lead scoring
+  # Persistence: AOF — job payloads must survive restarts
+  # Eviction: noeviction — never drop queued jobs
+  # ---------------------------------------------------------------------------
+  redis-queue-transactional:
+    image: redis:7-alpine
+    container_name: bos-redis-queue-transactional
+    restart: unless-stopped
+    ports:
+      - '6380:6379'
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy noeviction
+    volumes:
+      - redis-queue-transactional-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - bos-net
+
+  # ---------------------------------------------------------------------------
+  # Redis 3 — Heavy Queue
+  # Handles: campaigns, workflows, bulk imports
+  # Persistence: RDB only (save 60 1000) — acceptable to lose a few jobs on crash
+  # Eviction: allkeys-lru — can shed oldest keys under memory pressure
+  # ---------------------------------------------------------------------------
+  redis-queue-heavy:
+    image: redis:7-alpine
+    container_name: bos-redis-queue-heavy
+    restart: unless-stopped
+    ports:
+      - '6381:6379'
+    command: >
+      redis-server
+      --save 60 1000
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-queue-heavy-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - bos-net
+
+  # ---------------------------------------------------------------------------
+  # RedisInsight — GUI for all three Redis instances
+  # ---------------------------------------------------------------------------
+  redis-insight:
+    image: redis/redisinsight:latest
+    container_name: bos-redis-insight
+    restart: unless-stopped
+    ports:
+      - '5540:5540'
+    depends_on:
+      redis-operational:
+        condition: service_healthy
+      redis-queue-transactional:
+        condition: service_healthy
+      redis-queue-heavy:
+        condition: service_healthy
+    volumes:
+      - redis-insight-data:/data
+    networks:
+      - bos-net
+
+volumes:
+  redis-operational-data:
+  redis-queue-transactional-data:
+  redis-queue-heavy-data:
+  redis-insight-data:
+
+networks:
+  bos-net:
+    driver: bridge

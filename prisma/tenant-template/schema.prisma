@@ -1,0 +1,141 @@
+// =======================================================================
+// BOS Core DB — Tenant Template
+//
+// Cloned into every newly-provisioned `tenant_{uuid}` schema inside the
+// `bos_core` database at tenant signup. Contains per-tenant business data.
+//
+//   Phase 1 (now): branches + RBAC (roles, permissions, user_branch_memberships)
+//   Phase 2+: CRM business tables (contacts, accounts, deals, appointments,
+//             invoices, employees, inventory, tickets) and Layer 10
+//             vertical-specific entities.
+//
+// Used at runtime with a dynamic schema parameter:
+//   DATABASE_URL_CORE?schema=tenant_{uuid}
+//
+// Cross-schema references (e.g., UserBranchMembership.userId → public.users.id)
+// are soft references — no FK, enforced at application layer.
+//
+// Generated client: node_modules/@bos-prisma/tenant
+// =======================================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/@bos-prisma/tenant"
+}
+
+datasource db {
+  provider = "postgresql"
+  // URL + active schema provided at runtime via PrismaClient constructor
+}
+
+// =======================================================================
+// ENUMS
+// =======================================================================
+
+enum RoleScopeType {
+  tenant
+  branch
+}
+
+// =======================================================================
+// BRANCHES
+// =======================================================================
+
+model Branch {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String
+  code           String    @unique
+  address        String?
+  city           String?
+  state          String?
+  country        String?
+  postalCode     String?
+  phone          String?
+  email          String?
+  timezone       String    @default("UTC")
+  parentBranchId String?   @db.Uuid
+  isHeadOffice   Boolean   @default(false)
+  isActive       Boolean   @default(true)
+  metadata       Json      @default("{}")
+  deletedAt      DateTime? @db.Timestamptz
+  createdAt      DateTime  @default(now()) @db.Timestamptz
+  updatedAt      DateTime  @updatedAt @db.Timestamptz
+
+  parentBranch    Branch?                @relation("BranchHierarchy", fields: [parentBranchId], references: [id], onDelete: SetNull)
+  childBranches   Branch[]               @relation("BranchHierarchy")
+  userMemberships UserBranchMembership[]
+
+  @@index([isActive])
+  @@index([parentBranchId])
+}
+
+// =======================================================================
+// RBAC
+// =======================================================================
+
+model Role {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug         String        @unique
+  name         String
+  description  String?
+  scopeType    RoleScopeType
+  isSystem     Boolean       @default(false)
+  verticalSlug String?
+  createdAt    DateTime      @default(now()) @db.Timestamptz
+  updatedAt    DateTime      @updatedAt @db.Timestamptz
+
+  rolePermissions       RolePermission[]
+  userBranchMemberships UserBranchMembership[]
+
+  @@index([scopeType, isSystem])
+  @@index([verticalSlug])
+}
+
+model Permission {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug        String   @unique
+  scope       String
+  resource    String
+  action      String
+  description String
+  isSystem    Boolean  @default(true)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+
+  rolePermissions RolePermission[]
+
+  @@unique([scope, resource, action])
+  @@index([scope, resource])
+}
+
+model RolePermission {
+  roleId       String   @db.Uuid
+  permissionId String   @db.Uuid
+  createdAt    DateTime @default(now()) @db.Timestamptz
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+}
+
+model UserBranchMembership {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String    @db.Uuid
+  branchId         String?   @db.Uuid
+  roleId           String    @db.Uuid
+  assignedByUserId String?   @db.Uuid
+  assignedAt       DateTime  @default(now()) @db.Timestamptz
+  revokedAt        DateTime? @db.Timestamptz
+  revokedReason    String?
+  createdAt        DateTime  @default(now()) @db.Timestamptz
+  updatedAt        DateTime  @updatedAt @db.Timestamptz
+
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  role   Role    @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, branchId, roleId])
+  @@index([userId])
+  @@index([branchId])
+  @@index([roleId])
+}

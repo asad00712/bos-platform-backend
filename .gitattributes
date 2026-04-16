@@ -1,0 +1,22 @@
+# Auto-detect text files and normalize line endings to LF in repo
+* text=auto eol=lf
+
+# Force LF for shell scripts (critical for WSL compatibility)
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Force CRLF for Windows batch files
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files — no conversion
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.docx binary
+*.xlsx binary
+*.zip binary
+*.tar.gz binary

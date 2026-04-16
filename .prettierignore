@@ -1,0 +1,9 @@
+node_modules
+dist
+build
+coverage
+.pnpm-store
+pnpm-lock.yaml
+package-lock.json
+.brd_extract
+*.md
