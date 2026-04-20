@@ -90,7 +90,6 @@ export class AuthController {
       tenantId: result.tenantId,
       tenantSlug: result.tenantSlug,
       nextStep: 'EMAIL_VERIFICATION_REQUIRED',
-      devVerificationUrl: result.devVerificationUrl,
     };
   }
 

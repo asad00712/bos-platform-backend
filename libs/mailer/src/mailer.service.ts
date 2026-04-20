@@ -39,17 +39,6 @@ export class MailerService {
   async send(job: SendEmailJobPayload): Promise<SendResult> {
     const { subject, html, text } = this.renderTemplate(job);
 
-    if (isDevPlaceholderKey()) {
-      this.logger.warn(
-        [
-          `DEV MAIL ONLY for ${job.recipientEmail} [${job.templateId}]`,
-          `Subject: ${subject}`,
-          text,
-        ].join('\n'),
-      );
-      return { providerId: `dev-${Date.now()}` };
-    }
-
     const { data, error } = await this.resend.emails.send({
       from:    this.fromAddress,
       to:      job.recipientEmail,
@@ -84,9 +73,4 @@ export class MailerService {
         throw new Error(`Unknown email templateId: ${job.templateId}`);
     }
   }
-}
-
-function isDevPlaceholderKey(): boolean {
-  const key = process.env.RESEND_API_KEY ?? '';
-  return key === '' || key.startsWith('re_dev_placeholder');
 }

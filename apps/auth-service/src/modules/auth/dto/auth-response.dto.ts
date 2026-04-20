@@ -39,12 +39,6 @@ export class SignupResponseDto {
     example: 'EMAIL_VERIFICATION_REQUIRED',
   })
   nextStep!: 'EMAIL_VERIFICATION_REQUIRED';
-
-  @ApiProperty({
-    required: false,
-    description: 'Local development only: verification URL when transactional email provider is not configured.',
-  })
-  devVerificationUrl?: string;
 }
 
 export class RefreshResponseDto extends TokenPairDto {}
