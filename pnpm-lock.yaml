@@ -209,6 +209,10 @@ importers:
 
   libs/logger: {}
 
+  libs/mailer: {}
+
+  libs/queue: {}
+
   libs/redis: {}
 
   libs/security: {}

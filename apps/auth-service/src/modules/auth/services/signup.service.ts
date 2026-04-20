@@ -20,6 +20,7 @@ export interface SignupResult {
   userId: string;
   tenantId: string;
   tenantSlug: string;
+  devVerificationUrl?: string;
 }
 
 /**
@@ -127,6 +128,8 @@ export class SignupService {
       return { userId: user.id, tenantId: tenant.id, tenantSlug: tenant.slug };
     });
 
+    const verifyUrl = `${this.frontendUrl}/verify-email?token=${verificationToken}`;
+
     await this.mailQueue.add(
       MAIL_JOB_NAMES.SEND_EMAIL,
       {
@@ -136,7 +139,7 @@ export class SignupService {
         templateId:        EmailTemplateId.VERIFY_EMAIL,
         templateData:      {
           firstName:    dto.firstName,
-          verifyUrl:    `${this.frontendUrl}/verify-email?token=${verificationToken}`,
+          verifyUrl,
           expiresHours: Math.round(this.emailVerifyTtl / 3600),
         },
         triggeredByUserId: null,
@@ -144,10 +147,19 @@ export class SignupService {
       },
     );
 
+    if (isDevPlaceholderMailKey()) {
+      return { ...result, devVerificationUrl: verifyUrl };
+    }
+
     return result;
   }
 }
 
 function buildSchemaName(tenantId: string): string {
   return `tenant_${tenantId.replace(/-/g, '').slice(0, 16)}`;
+}
+
+function isDevPlaceholderMailKey(): boolean {
+  const key = process.env.RESEND_API_KEY ?? '';
+  return key === '' || key.startsWith('re_dev_placeholder');
 }
