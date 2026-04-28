@@ -5,10 +5,14 @@ import {
   type SendEmailJobPayload,
   type VerifyEmailTemplateData,
   type PasswordResetTemplateData,
+  type StaffInviteTemplateData,
+  type TaskAssignedTemplateData,
 } from '@bos/queue';
-import { RESEND_CLIENT, DEFAULT_FROM_NAME, DEFAULT_FROM_ADDRESS } from './mailer.constants';
+import { RESEND_CLIENT, MAILER_FROM_NAME, MAILER_FROM_ADDR } from './mailer.constants';
 import { renderVerifyEmail } from './templates/verify-email.template';
 import { renderPasswordReset } from './templates/password-reset.template';
+import { renderStaffInvite } from './templates/staff-invite.template';
+import { renderTaskAssigned } from './templates/task-assigned.template';
 
 export interface SendResult {
   /** Provider-assigned message ID — store in OutboundMessage.providerId */
@@ -32,8 +36,10 @@ export class MailerService {
 
   constructor(
     @Inject(RESEND_CLIENT) private readonly resend: Resend,
+    @Inject(MAILER_FROM_NAME) fromName: string,
+    @Inject(MAILER_FROM_ADDR) fromAddr: string,
   ) {
-    this.fromAddress = `${DEFAULT_FROM_NAME} <${DEFAULT_FROM_ADDRESS}>`;
+    this.fromAddress = `${fromName} <${fromAddr}>`;
   }
 
   async send(job: SendEmailJobPayload): Promise<SendResult> {
@@ -68,6 +74,12 @@ export class MailerService {
 
       case EmailTemplateId.PASSWORD_RESET:
         return renderPasswordReset(job.templateData as unknown as PasswordResetTemplateData);
+
+      case EmailTemplateId.STAFF_INVITE:
+        return renderStaffInvite(job.templateData as unknown as StaffInviteTemplateData);
+
+      case EmailTemplateId.TASK_ASSIGNED:
+        return renderTaskAssigned(job.templateData as unknown as TaskAssignedTemplateData);
 
       default:
         throw new Error(`Unknown email templateId: ${job.templateId}`);

@@ -3,3 +3,8 @@ export * from './database.constants';
 export * from './services';
 export * from './health';
 export * from './seeds/tenant-defaults';
+export * from './sql/custom-fields-migration';
+export * from './sql/contacts-leads-migration';
+export * from './sql/lead-assignment-webhook-migration';
+export * from './sql/lead-activities-migration';
+export * from './sql/tasks-migration';

@@ -57,6 +57,9 @@ export class BosAuthClientModule {
     if (options.registerGlobalGuards !== false) {
       providers.push(
         { provide: APP_GUARD, useClass: JwtAuthGuard },
+        // PermissionsGuard runs AFTER JwtAuthGuard (same module = same init order).
+        // It uses ModuleRef.get(PERMISSION_RESOLVER, { strict: false }) at runtime
+        // to locate the resolver from any module in the app, bypassing DI scoping.
         { provide: APP_GUARD, useClass: PermissionsGuard },
       );
     }

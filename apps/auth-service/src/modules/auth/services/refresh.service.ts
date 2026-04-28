@@ -73,15 +73,16 @@ export class RefreshService {
     }
 
     // Issue new token pair. New refresh shares familyId with parent.
+    // tenantId comes from the session row (populated at login time).
     const access = await this.tokenIssuer.issueAccessToken({
-      sub: existing.userId,
-      scope: SessionScope.TENANT,
-      sessionId: existing.sessionId,
-      tenantId: null,
-      activeBranchId: null,
+      sub:                existing.userId,
+      scope:              SessionScope.TENANT,
+      sessionId:          existing.sessionId,
+      tenantId:           session.tenantId,
+      activeBranchId:     session.activeBranchId,
       accessibleBranchIds: [],
       hasTenantWideAccess: false,
-      roles: [],
+      roles:              [],
       v: 1,
     });
 

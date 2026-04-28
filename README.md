@@ -16,6 +16,7 @@ One platform, 100+ industry verticals (Medical, Law, Restaurant, School, Gym, et
 
 ## Architecture
 
+
 8 microservices in a NestJS monorepo, communicating via Redis (BullMQ for jobs, Streams for broadcast events, Pub/Sub for realtime).
 
 ```

@@ -23,6 +23,22 @@
         },
         "deleteOutDir": true
       }
+    },
+    "crm-core": {
+      "type": "application",
+      "root": "apps/crm-core",
+      "entryFile": "main",
+      "sourceRoot": "apps/crm-core/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/crm-core/tsconfig.app.json",
+        "builder": {
+          "type": "webpack",
+          "options": {
+            "webpackConfigPath": "apps/crm-core/webpack.config.js"
+          }
+        },
+        "deleteOutDir": true
+      }
     }
   }
 }

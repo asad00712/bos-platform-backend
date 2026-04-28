@@ -6,3 +6,5 @@ export * from './tenant.exceptions';
 export * from './permission.exceptions';
 export * from './validation.exception';
 export * from './infrastructure.exceptions';
+export * from './custom-field.exceptions';
+export * from './crm.exceptions';

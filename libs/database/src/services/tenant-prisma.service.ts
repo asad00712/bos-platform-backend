@@ -4,6 +4,7 @@ import {
   OnModuleDestroy,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { LRUCache } from 'lru-cache';
 import { PrismaClient } from '@bos-prisma/tenant';
@@ -75,15 +76,19 @@ export class TenantPrismaService implements OnModuleDestroy {
   }
 
   private buildClient(schemaName: string): PrismaClient {
-    const url = this.withSchema(this.baseUrl, schemaName);
+    // pg.Pool ignores Prisma's ?schema= convention, but PrismaPg accepts a
+    // `schema` option that tells the Prisma query engine which schema to use
+    // when generating SQL (e.g. "tenant_xxxx"."Branch" instead of "public"."Branch").
+    const pool = new Pool({ connectionString: this.stripSchemaParam(this.baseUrl) });
     return new PrismaClient({
-      adapter: new PrismaPg({ connectionString: url }),
+      adapter: new PrismaPg(pool, { schema: schemaName, disposeExternalPool: true }),
     });
   }
 
-  private withSchema(url: string, schemaName: string): string {
+  /** Strip any existing ?schema= param so pg.Pool does not receive a confusing URL. */
+  private stripSchemaParam(url: string): string {
     const u = new URL(url);
-    u.searchParams.set('schema', schemaName);
+    u.searchParams.delete('schema');
     return u.toString();
   }
 

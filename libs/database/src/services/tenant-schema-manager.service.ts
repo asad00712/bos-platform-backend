@@ -58,6 +58,8 @@ export class TenantSchemaManager {
     schemaName: string;
     vertical?: string;
     ifNotExists?: boolean;
+    /** If provided, assigns the `owner` role to this user after provisioning. */
+    ownerUserId?: string;
   }): Promise<void> {
     const { schemaName, vertical, ifNotExists = false } = opts;
     this.assertValidSchemaName(schemaName);
@@ -97,7 +99,76 @@ export class TenantSchemaManager {
     // so the cross-table scopeType↔branchId invariant is enforced at the
     // application layer (UserBranchMembershipService) for now.
 
+    // ── Step 5: Assign owner role to founding user ────────────────────────────
+    if (opts.ownerUserId) {
+      await this.assignOwnerRole(schemaName, opts.ownerUserId);
+    }
+
     this.logger.log(`Schema ${schemaName} provisioned successfully`);
+  }
+
+  /**
+   * Assigns the tenant-scoped `owner` role to a user in the given schema.
+   * Safe to call multiple times — does nothing if the row already exists.
+   */
+  async assignOwnerRole(schemaName: string, userId: string): Promise<void> {
+    this.assertValidSchemaName(schemaName);
+    await this.core.$executeRawUnsafe(`
+      SET LOCAL search_path TO "${schemaName}", public;
+      INSERT INTO "UserBranchMembership" ("userId", "branchId", "roleId", "assignedByUserId", "updatedAt")
+      SELECT '${esc(userId)}'::uuid, NULL, r.id, '${esc(userId)}'::uuid, CURRENT_TIMESTAMP
+      FROM "Role" r
+      WHERE r.slug = 'owner'
+      AND NOT EXISTS (
+        SELECT 1 FROM "UserBranchMembership" ubm
+        WHERE ubm."userId" = '${esc(userId)}'::uuid
+          AND ubm."roleId" = r.id
+          AND ubm."branchId" IS NULL
+      )
+    `);
+  }
+
+  /**
+   * Applies an incremental migration SQL string to every tenant schema in the
+   * database. Fetches all tenant schemaNames from the Tenant table, then runs
+   * each statement (split on `;`) against each schema using SET LOCAL search_path.
+   *
+   * All statements in `sql` must be idempotent (IF NOT EXISTS / ON CONFLICT)
+   * since re-running is safe and expected.
+   *
+   * Returns a result object listing which schemas succeeded and which failed
+   * (with error messages) so the caller can surface partial failures.
+   */
+  async applyMigrationToAllTenants(sql: string): Promise<{
+    succeeded: string[];
+    failed: Array<{ schemaName: string; error: string }>;
+  }> {
+    const tenants = await this.core.tenant.findMany({
+      select: { schemaName: true },
+    });
+
+    const succeeded: string[] = [];
+    const failed: Array<{ schemaName: string; error: string }> = [];
+
+    for (const { schemaName } of tenants) {
+      this.assertValidSchemaName(schemaName);
+      const statements = this.splitSqlStatements(sql);
+      try {
+        for (const stmt of statements) {
+          await this.core.$executeRawUnsafe(
+            `SET LOCAL search_path TO "${schemaName}", public;\n${stmt}`,
+          );
+        }
+        succeeded.push(schemaName);
+        this.logger.log(`Migration applied to ${schemaName}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        failed.push({ schemaName, error: message });
+        this.logger.error(`Migration failed for ${schemaName}: ${message}`);
+      }
+    }
+
+    return { succeeded, failed };
   }
 
   /**
@@ -184,18 +255,42 @@ export class TenantSchemaManager {
     }
   }
 
-  /** Splits a SQL string into individual statements, stripping comment lines first. */
+  /**
+   * Splits a SQL string into individual statements, stripping -- comment lines
+   * first. Correctly handles $$ dollar-quoted blocks (used in DO $$ ... END $$
+   * statements) so that semicolons inside PL/pgSQL bodies are not treated as
+   * statement separators.
+   */
   private splitSqlStatements(sql: string): string[] {
-    // Strip single-line comment lines before splitting so that statements
-    // like "-- CreateTable\nCREATE TABLE ..." are not filtered out.
     const stripped = sql
       .split('\n')
       .filter((line) => !line.trim().startsWith('--'))
       .join('\n');
-    return stripped
-      .split(';')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+
+    const statements: string[] = [];
+    let current = '';
+    let inDollarQuote = false;
+    let i = 0;
+
+    while (i < stripped.length) {
+      if (stripped[i] === '$' && stripped[i + 1] === '$') {
+        inDollarQuote = !inDollarQuote;
+        current += '$$';
+        i += 2;
+      } else if (stripped[i] === ';' && !inDollarQuote) {
+        const trimmed = current.trim();
+        if (trimmed.length > 0) statements.push(trimmed);
+        current = '';
+        i++;
+      } else {
+        current += stripped[i];
+        i++;
+      }
+    }
+    const trimmed = current.trim();
+    if (trimmed.length > 0) statements.push(trimmed);
+
+    return statements;
   }
 
   private assertValidSchemaName(schemaName: string): void {

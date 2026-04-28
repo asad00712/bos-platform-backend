@@ -42,6 +42,7 @@ import {
   TwoFactorCodeDto,
   TwoFactorVerifyLoginDto,
   TwoFactorSetupResponseDto,
+  InviteAcceptDto,
 } from './dto';
 import { UserResponseDto } from '../users/dto/user-response.dto';
 import { SignupService } from './services/signup.service';
@@ -51,6 +52,7 @@ import { LogoutService } from './services/logout.service';
 import { EmailVerifyService } from './services/email-verify.service';
 import { PasswordResetService } from './services/password-reset.service';
 import { TwoFactorService } from './services/two-factor.service';
+import { InviteAcceptService } from './services/invite-accept.service';
 import { UsersService } from '../users/users.service';
 
 @ApiTags('Authentication')
@@ -65,6 +67,7 @@ export class AuthController {
     private readonly emailVerify: EmailVerifyService,
     private readonly passwordReset: PasswordResetService,
     private readonly twoFactor: TwoFactorService,
+    private readonly inviteAccept: InviteAcceptService,
     private readonly users: UsersService,
     private readonly jwtVerifier: JwtVerifierService,
   ) {}
@@ -90,6 +93,43 @@ export class AuthController {
       tenantId: result.tenantId,
       tenantSlug: result.tenantSlug,
       nextStep: 'EMAIL_VERIFICATION_REQUIRED',
+    };
+  }
+
+  // ===========================
+  // Invite acceptance
+  // ===========================
+
+  @Public()
+  @Post('invite/accept')
+  @Throttle({ default: { ttl: 3_600_000, limit: 10 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Accept a staff invite — set password and receive access tokens' })
+  @ApiBody({ type: InviteAcceptDto })
+  @ApiResponse({ status: 200, type: LoginResponseDto })
+  @ApiResponse({ status: 400, description: 'Token invalid / expired / already used, or password too weak' })
+  @ApiResponse({ status: 409, description: 'Invite already accepted' })
+  async inviteAcceptHandler(
+    @Body() dto: InviteAcceptDto,
+    @Ip() ip: string,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<LoginResponseDto> {
+    const result = await this.inviteAccept.execute({
+      rawToken: dto.token,
+      password: dto.password,
+      ipAddress: ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
+    this.setRefreshCookie(res, result.refreshTokenRaw, result.refreshTokenExpiresAt);
+
+    return {
+      accessToken: result.accessToken,
+      accessTokenExpiresIn: result.accessTokenExpiresIn,
+      accessTokenExpiresAt: result.accessTokenExpiresAt.toISOString(),
+      requires2FA: false,
+      user: UserResponseDto.fromEntity(result.user),
     };
   }
 

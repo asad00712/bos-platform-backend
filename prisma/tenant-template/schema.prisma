@@ -61,9 +61,16 @@ model Branch {
   createdAt      DateTime  @default(now()) @db.Timestamptz
   updatedAt      DateTime  @updatedAt @db.Timestamptz
 
-  parentBranch    Branch?                @relation("BranchHierarchy", fields: [parentBranchId], references: [id], onDelete: SetNull)
-  childBranches   Branch[]               @relation("BranchHierarchy")
-  userMemberships UserBranchMembership[]
+  parentBranch         Branch?                @relation("BranchHierarchy", fields: [parentBranchId], references: [id], onDelete: SetNull)
+  childBranches        Branch[]               @relation("BranchHierarchy")
+  userMemberships      UserBranchMembership[]
+  contacts             Contact[]
+  leads                Lead[]
+  contactSources       ContactSource[]
+  leadStatuses         LeadStatusConfig[]
+  contactLists         ContactList[]
+  leadAssignmentConfig LeadAssignmentConfig?
+  leadWebhooks         LeadWebhook[]
 
   @@index([isActive])
   @@index([parentBranchId])
@@ -120,16 +127,17 @@ model RolePermission {
 }
 
 model UserBranchMembership {
-  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId           String    @db.Uuid
-  branchId         String?   @db.Uuid
-  roleId           String    @db.Uuid
-  assignedByUserId String?   @db.Uuid
-  assignedAt       DateTime  @default(now()) @db.Timestamptz
-  revokedAt        DateTime? @db.Timestamptz
-  revokedReason    String?
-  createdAt        DateTime  @default(now()) @db.Timestamptz
-  updatedAt        DateTime  @updatedAt @db.Timestamptz
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId              String    @db.Uuid
+  branchId            String?   @db.Uuid
+  roleId              String    @db.Uuid
+  assignedByUserId    String?   @db.Uuid
+  assignedAt          DateTime  @default(now()) @db.Timestamptz
+  revokedAt           DateTime? @db.Timestamptz
+  revokedReason       String?
+  roundRobinAvailable Boolean   @default(true)
+  createdAt           DateTime  @default(now()) @db.Timestamptz
+  updatedAt           DateTime  @updatedAt @db.Timestamptz
 
   branch Branch? @relation(fields: [branchId], references: [id], onDelete: Cascade)
   role   Role    @relation(fields: [roleId], references: [id], onDelete: Restrict)
@@ -138,4 +146,528 @@ model UserBranchMembership {
   @@index([userId])
   @@index([branchId])
   @@index([roleId])
+}
+
+// =======================================================================
+// CUSTOM FIELDS
+// =======================================================================
+
+enum CustomFieldEntityType {
+  CONTACT
+  DEAL
+  LEAD
+}
+
+enum CustomFieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  BOOLEAN
+  DATE
+  DATETIME
+  SELECT
+  MULTI_SELECT
+  URL
+  EMAIL
+  PHONE
+}
+
+model CustomFieldDefinition {
+  id           String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  entityType   CustomFieldEntityType
+  label        String
+  key          String
+  fieldType    CustomFieldType
+  isRequired   Boolean               @default(false)
+  options      Json                  @default("[]")
+  defaultValue String?
+  placeholder  String?
+  displayOrder Int                   @default(0)
+  isActive     Boolean               @default(true)
+  createdAt    DateTime              @default(now()) @db.Timestamptz
+  updatedAt    DateTime              @updatedAt @db.Timestamptz
+
+  values CustomFieldValue[]
+
+  @@unique([entityType, key])
+  @@index([entityType, isActive])
+}
+
+model CustomFieldValue {
+  id           String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  definitionId String                @db.Uuid
+  entityType   CustomFieldEntityType
+  entityId     String                @db.Uuid
+  value        Json
+  createdAt    DateTime              @default(now()) @db.Timestamptz
+  updatedAt    DateTime              @updatedAt @db.Timestamptz
+
+  definition CustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+
+  @@unique([definitionId, entityId])
+  @@index([entityType, entityId])
+  @@index([definitionId])
+}
+
+// =======================================================================
+// TAGS (tenant-wide shared pool — used by CONTACT and LEAD)
+// =======================================================================
+
+enum TagEntityType {
+  CONTACT
+  LEAD
+}
+
+model Tag {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String    @unique
+  color     String?
+  isSystem  Boolean   @default(false)
+  createdAt DateTime  @default(now()) @db.Timestamptz
+  updatedAt DateTime  @updatedAt @db.Timestamptz
+
+  entityTags EntityTag[]
+}
+
+/// Polymorphic junction — links a Tag to any tagged entity (CONTACT or LEAD).
+/// entityId is a soft reference (no FK) so the same table covers multiple entity types.
+model EntityTag {
+  tagId      String        @db.Uuid
+  entityType TagEntityType
+  entityId   String        @db.Uuid
+  createdAt  DateTime      @default(now()) @db.Timestamptz
+
+  tag Tag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([tagId, entityType, entityId])
+  @@index([entityType, entityId])
+  @@index([tagId])
+}
+
+// =======================================================================
+// CONTACT SOURCES (per-branch, shared by Contact and Lead)
+// =======================================================================
+
+model ContactSource {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId  String    @db.Uuid
+  name      String
+  isSystem  Boolean   @default(false)
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now()) @db.Timestamptz
+  updatedAt DateTime  @updatedAt @db.Timestamptz
+
+  branch   Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  contacts Contact[]
+  leads    Lead[]
+
+  @@unique([branchId, name])
+  @@index([branchId, isActive])
+}
+
+// =======================================================================
+// LEAD STATUS CONFIG (per-branch)
+// =======================================================================
+
+model LeadStatusConfig {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId     String    @db.Uuid
+  name         String
+  color        String?
+  displayOrder Int       @default(0)
+  isSystem     Boolean   @default(false)
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @db.Timestamptz
+  updatedAt    DateTime  @updatedAt @db.Timestamptz
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  leads  Lead[]
+
+  @@unique([branchId, name])
+  @@index([branchId, isActive])
+}
+
+// =======================================================================
+// CONTACTS
+// =======================================================================
+
+enum ContactStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+model Contact {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId        String        @db.Uuid
+  firstName       String
+  lastName        String?
+  email           String?
+  phone           String?
+  company         String?
+  jobTitle        String?
+  address         String?
+  city            String?
+  state           String?
+  country         String?
+  postalCode      String?
+  sourceId        String?       @db.Uuid
+  /// Soft reference to the lead that triggered creation via conversion. No FK constraint.
+  originLeadId    String?       @db.Uuid
+  status          ContactStatus @default(ACTIVE)
+  ownedByUserId   String?       @db.Uuid
+  notes           String?
+  metadata        Json          @default("{}")
+  createdByUserId String?       @db.Uuid
+  deletedAt       DateTime?     @db.Timestamptz
+  createdAt       DateTime      @default(now()) @db.Timestamptz
+  updatedAt       DateTime      @updatedAt @db.Timestamptz
+
+  branch          Branch              @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  source          ContactSource?      @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  leads           Lead[]
+  listMemberships ContactListMember[]
+
+  @@index([branchId, status])
+  @@index([branchId, deletedAt])
+  @@index([email])
+  @@index([phone])
+  @@index([sourceId])
+  @@index([ownedByUserId])
+}
+
+// =======================================================================
+// LEADS
+// =======================================================================
+
+enum LeadPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum LeadActivityType {
+  NOTE
+  CALL
+  EMAIL
+  SMS
+  WHATSAPP
+  MEETING
+  TASK
+}
+
+enum ActivityDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum CallOutcome {
+  SPOKE
+  NO_ANSWER
+  VOICEMAIL
+  BUSY
+  WRONG_NUMBER
+  CALL_BACK_REQUESTED
+}
+
+enum ActivityTaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model Lead {
+  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId          String       @db.Uuid
+  contactId         String?      @db.Uuid
+  firstName         String
+  lastName          String?
+  email             String?
+  phone             String?
+  company           String?
+  sourceId          String?      @db.Uuid
+  statusId          String?      @db.Uuid
+  priority          LeadPriority @default(MEDIUM)
+  estimatedValue    Float?
+  ownedByUserId     String?      @db.Uuid
+  notes             String?
+  convertedAt       DateTime?    @db.Timestamptz
+  convertedByUserId String?      @db.Uuid
+  /// Denorm: updated on every activity write for fast timeline queries
+  lastActivityAt    DateTime?    @db.Timestamptz
+  /// Denorm: earliest dueAt of PENDING/IN_PROGRESS tasks for this lead
+  nextFollowUpAt    DateTime?    @db.Timestamptz
+  /// Denorm: total non-deleted activity count for this lead
+  touchpointCount   Int          @default(0)
+  metadata          Json         @default("{}")
+  createdByUserId   String?      @db.Uuid
+  deletedAt         DateTime?    @db.Timestamptz
+  createdAt         DateTime     @default(now()) @db.Timestamptz
+  updatedAt         DateTime     @updatedAt @db.Timestamptz
+
+  branch     Branch             @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  contact    Contact?           @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  source     ContactSource?     @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  status     LeadStatusConfig?  @relation(fields: [statusId], references: [id], onDelete: SetNull)
+  activities LeadActivity[]
+
+  @@index([branchId])
+  @@index([branchId, deletedAt])
+  @@index([contactId])
+  @@index([sourceId])
+  @@index([statusId])
+  @@index([ownedByUserId])
+  @@index([convertedAt])
+  @@index([nextFollowUpAt])
+}
+
+model LeadActivity {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId           String             @db.Uuid
+  type             LeadActivityType
+  direction        ActivityDirection?
+  /// For CALL/MEETING/TASK: call subject, meeting title, or task name
+  subject          String?
+  /// Free-text notes, email body, or call summary
+  body             String?
+  outcome          CallOutcome?
+  /// For CALL type: duration in seconds
+  durationSeconds  Int?
+  /// For CALL/MEETING: URL to recording file
+  recordingUrl     String?
+  /// For CALL/MEETING: URL to AI-generated transcript
+  transcriptUrl    String?
+  /// For MEETING: when it is/was scheduled
+  scheduledAt      DateTime?          @db.Timestamptz
+  /// When the activity was actually completed (call ended, meeting finished)
+  completedAt      DateTime?          @db.Timestamptz
+  /// For TASK: deadline for the follow-up
+  dueAt            DateTime?          @db.Timestamptz
+  taskStatus       ActivityTaskStatus?
+  createdByUserId  String             @db.Uuid
+  /// For TASK: who owns the follow-up
+  assignedToUserId String?            @db.Uuid
+  metadata         Json?
+  deletedAt        DateTime?          @db.Timestamptz
+  createdAt        DateTime           @default(now()) @db.Timestamptz
+  updatedAt        DateTime           @updatedAt @db.Timestamptz
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, createdAt(sort: Desc)])
+  @@index([assignedToUserId, dueAt])
+  @@index([type, leadId])
+  @@index([taskStatus, assignedToUserId])
+}
+
+// =======================================================================
+// CONTACT LISTS (static only in Phase 1)
+// =======================================================================
+
+enum ContactListType {
+  STATIC
+}
+
+model ContactList {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId        String          @db.Uuid
+  name            String
+  description     String?
+  listType        ContactListType @default(STATIC)
+  createdByUserId String?         @db.Uuid
+  isActive        Boolean         @default(true)
+  createdAt       DateTime        @default(now()) @db.Timestamptz
+  updatedAt       DateTime        @updatedAt @db.Timestamptz
+
+  branch  Branch              @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  members ContactListMember[]
+
+  @@unique([branchId, name])
+  @@index([branchId, isActive])
+}
+
+model ContactListMember {
+  listId        String   @db.Uuid
+  contactId     String   @db.Uuid
+  addedByUserId String?  @db.Uuid
+  addedAt       DateTime @default(now()) @db.Timestamptz
+
+  list    ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contact Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([listId, contactId])
+  @@index([contactId])
+  @@index([listId])
+}
+
+// =======================================================================
+// LEAD ASSIGNMENT
+// =======================================================================
+
+enum LeadAssignmentMode {
+  ROUND_ROBIN
+  MANUAL
+}
+
+/// Per-branch configuration for auto lead assignment.
+/// eligibleRoleIds: JSON array of Role UUIDs — only members with these roles
+/// and roundRobinAvailable=true on their UserBranchMembership are in the pool.
+model LeadAssignmentConfig {
+  id              String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId        String             @unique @db.Uuid
+  assignmentMode  LeadAssignmentMode @default(ROUND_ROBIN)
+  eligibleRoleIds Json               @default("[]")
+  isActive        Boolean            @default(true)
+  createdAt       DateTime           @default(now()) @db.Timestamptz
+  updatedAt       DateTime           @updatedAt @db.Timestamptz
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+}
+
+// =======================================================================
+// LEAD WEBHOOKS
+// =======================================================================
+
+/// Webhook tokens for external lead ingestion (web forms, Zapier, etc.).
+/// token is a 64-char hex secret stored in Redis for fast O(1) lookup.
+model LeadWebhook {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId  String   @db.Uuid
+  sourceId  String?  @db.Uuid
+  name      String
+  token     String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([branchId])
+}
+
+// =======================================================================
+// TASKS
+// =======================================================================
+
+enum TaskType {
+  TODO
+  CALL
+  EMAIL
+  MEETING
+  FOLLOW_UP
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  DONE
+  CANCELLED
+}
+
+enum TaskPriority {
+  URGENT
+  HIGH
+  NORMAL
+  LOW
+}
+
+enum TaskEntityType {
+  LEAD
+  CONTACT
+}
+
+/// Full-featured task management entity. Can be standalone or linked to a
+/// CRM entity (Lead, Contact) via entityType + entityId (soft reference).
+model Task {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title           String
+  /// Markdown supported
+  description     String?
+  type            TaskType        @default(TODO)
+  status          TaskStatus      @default(TODO)
+  priority        TaskPriority    @default(NORMAL)
+  startDate       DateTime?       @db.Timestamptz
+  /// Precise due datetime (not just date) — supports time-based reminders
+  dueAt           DateTime?       @db.Timestamptz
+  completedAt     DateTime?       @db.Timestamptz
+  /// Effort estimation (ClickUp-style story points)
+  points          Int?
+  /// Expected work duration in minutes
+  timeEstimate    Int?
+  /// iCal RRULE string — e.g. "FREQ=WEEKLY;BYDAY=MO;COUNT=10"
+  recurrenceRule  String?
+  /// ISO datetime strings for scheduled reminders
+  reminders       Json?
+  /// CRM entity this task belongs to (soft reference, no FK)
+  entityType      TaskEntityType?
+  entityId        String?         @db.Uuid
+  /// Null = top-level task; set = subtask
+  parentTaskId    String?         @db.Uuid
+  /// Array of userIds watching this task (JSON for simplicity)
+  watchers        Json?
+  createdByUserId String          @db.Uuid
+  metadata        Json?
+  deletedAt       DateTime?       @db.Timestamptz
+  createdAt       DateTime        @default(now()) @db.Timestamptz
+  updatedAt       DateTime        @updatedAt @db.Timestamptz
+
+  parentTask Task?  @relation("TaskSubtasks", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  subtasks   Task[] @relation("TaskSubtasks")
+
+  assignees  TaskAssignee[]
+  checklists TaskChecklist[]
+
+  @@index([entityType, entityId])
+  @@index([createdByUserId])
+  @@index([status, dueAt])
+  @@index([parentTaskId])
+  @@index([dueAt])
+}
+
+/// Junction table — supports multiple assignees per task (ClickUp-style).
+model TaskAssignee {
+  taskId           String   @db.Uuid
+  userId           String   @db.Uuid
+  assignedAt       DateTime @default(now()) @db.Timestamptz
+  assignedByUserId String?  @db.Uuid
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, userId])
+  @@index([userId])
+}
+
+/// A named checklist attached to a task. One task can have multiple checklists.
+model TaskChecklist {
+  id           String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  taskId       String @db.Uuid
+  title        String
+  displayOrder Int    @default(0)
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @updatedAt @db.Timestamptz
+
+  task  Task                @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  items TaskChecklistItem[]
+
+  @@index([taskId])
+}
+
+/// Individual item inside a TaskChecklist. Supports checked state + who checked it.
+model TaskChecklistItem {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  checklistId     String    @db.Uuid
+  title           String
+  isChecked       Boolean   @default(false)
+  checkedAt       DateTime? @db.Timestamptz
+  checkedByUserId String?   @db.Uuid
+  displayOrder    Int       @default(0)
+  createdAt       DateTime  @default(now()) @db.Timestamptz
+  updatedAt       DateTime  @updatedAt @db.Timestamptz
+
+  checklist TaskChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+
+  @@index([checklistId])
 }

@@ -89,6 +89,11 @@ describe('LoginService', () => {
     accessTtl: 900,
     refreshTtl: 2_592_000,
   };
+  const corePrisma = {
+    tenantMembership: {
+      findFirst: jest.fn().mockResolvedValue({ tenantId: 'tenant-1' }),
+    },
+  };
   const config: Partial<ConfigService> = {
     get: jest.fn((key: string, fallback?: number) => {
       if (key === 'AUTH_LOCKOUT_MAX_ATTEMPTS') {
@@ -105,6 +110,7 @@ describe('LoginService', () => {
     jest.clearAllMocks();
     redisClient.get.mockResolvedValue(null);
     redisClient.incr.mockResolvedValue(1);
+    corePrisma.tenantMembership.findFirst.mockResolvedValue({ tenantId: 'tenant-1' });
 
     service = new LoginService(
       users as unknown as ConstructorParameters<typeof LoginService>[0],
@@ -113,6 +119,7 @@ describe('LoginService', () => {
       refreshTokens as unknown as ConstructorParameters<typeof LoginService>[3],
       tokenIssuer as unknown as ConstructorParameters<typeof LoginService>[4],
       { client: redisClient } as unknown as ConstructorParameters<typeof LoginService>[5],
+      corePrisma as unknown as ConstructorParameters<typeof LoginService>[6],
       config as ConfigService,
     );
   });

@@ -12,6 +12,7 @@ import { LogoutService } from './services/logout.service';
 import { EmailVerifyService } from './services/email-verify.service';
 import { PasswordResetService } from './services/password-reset.service';
 import { TwoFactorService } from './services/two-factor.service';
+import { InviteAcceptService } from './services/invite-accept.service';
 
 @Module({
   imports: [UsersModule, BosQueueModule.forFeature([{ name: QUEUE_NAMES.MAIL }])],
@@ -27,7 +28,8 @@ import { TwoFactorService } from './services/two-factor.service';
     EmailVerifyService,
     PasswordResetService,
     TwoFactorService,
+    InviteAcceptService,
   ],
-  exports: [TokenIssuerService, SessionsRepository, RefreshTokensRepository],
+  exports: [TokenIssuerService, SessionsRepository, RefreshTokensRepository, EmailVerifyService],
 })
 export class AuthModule {}
