@@ -8,6 +8,7 @@ Primary user-facing module of the Auth Service. Owns:
 
 - **Signup** — self-serve org-owner registration + email verification trigger. Tenant schema provisioning is enqueued as an async job AFTER email verification (not during signup).
 - **Login** — password verification + lockout tracking + 2FA gating + session + token issuance.
+- **Invite acceptance** — accepts a staff invite token, sets password, activates user + TenantMembership, creates UserBranchMembership in tenant schema, issues full login tokens.
 - **Token issuance** — signs JWT access tokens with the private RSA key, generates opaque refresh tokens, persists refresh token metadata with rotation tracking (familyId/parentId) for reuse detection.
 - **Refresh** — rotates refresh tokens, detects reuse (→ revokes entire token family).
 - **Logout** — single-device + all-device, revokes access jti in Redis + marks refresh revoked.
@@ -19,7 +20,8 @@ Primary user-facing module of the Auth Service. Owns:
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | POST | `/auth/signup` | Public | Org-owner self-signup — creates User(pending) + Tenant(provisioning) |
-| GET | `/auth/verify-email` | Public | Completes email verification via token |
+| POST | `/auth/verify-email` | Public | Completes email verification via token |
+| POST | `/auth/invite/accept` | Public | Accept staff invite — set password → access + refresh tokens issued |
 | POST | `/auth/login` | Public | Email + password → access + refresh (+ temp token if 2FA) |
 | POST | `/auth/refresh` | Refresh token (cookie) | Rotates tokens with reuse detection |
 | POST | `/auth/logout` | Bearer | Ends current session |
@@ -44,11 +46,13 @@ None for public endpoints. Protected endpoints (logout, change-password, me) req
 
 - `public.users` — identity writes (via UsersService)
 - `public.tenants` — tenant row creation on signup
-- `public.tenant_memberships` — owner membership creation on signup
-- `public.sessions` — session rows on login/2FA-complete
+- `public.tenant_memberships` — owner membership creation on signup; status flip on invite accept
+- `public.user_invites` — invite token lookup + `acceptedAt` stamp on invite accept
+- `public.sessions` — session rows on login/2FA-complete/invite-accept
 - `public.refresh_tokens` — refresh token family rows
 - `public.email_verifications` — signup + email change tokens
 - `public.password_resets` — forgot-password tokens
+- `tenant_{uuid}.UserBranchMembership` — role assignment created on invite accept (via TenantPrismaService)
 
 ## Dependencies
 

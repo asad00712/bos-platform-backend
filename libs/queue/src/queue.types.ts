@@ -11,6 +11,7 @@ export enum EmailTemplateId {
   VERIFY_EMAIL    = 'auth.verify-email',
   PASSWORD_RESET  = 'auth.password-reset',
   STAFF_INVITE    = 'auth.staff-invite',
+  TASK_ASSIGNED   = 'crm.task-assigned',
 }
 
 // ---------------------------------------------------------------------------
@@ -58,4 +59,57 @@ export interface StaffInviteTemplateData {
   orgName:      string;
   inviteUrl:    string;
   expiresHours: number;
+}
+
+export interface TaskAssignedTemplateData {
+  assigneeName:   string;
+  assignerName:   string;
+  taskTitle:      string;
+  taskDueAt:      string | null;
+  taskUrl:        string;
+}
+
+// ---------------------------------------------------------------------------
+// Workflow queue job names
+// ---------------------------------------------------------------------------
+
+export const WORKFLOW_JOB_NAMES = {
+  LEAD_CREATED:        'crm.lead.created',
+  LEAD_STATUS_CHANGED: 'crm.lead.status_changed',
+  LEAD_ASSIGNED:       'crm.lead.assigned',
+} as const;
+
+export type WorkflowJobName = (typeof WORKFLOW_JOB_NAMES)[keyof typeof WORKFLOW_JOB_NAMES];
+
+// ---------------------------------------------------------------------------
+// CRM Lead workflow event payloads
+// ---------------------------------------------------------------------------
+
+export interface LeadCreatedJobPayload {
+  tenantId:        string;
+  schemaName:      string;
+  leadId:          string;
+  contactId:       string;
+  branchId:        string;
+  createdByUserId: string | null;
+}
+
+export interface LeadStatusChangedJobPayload {
+  tenantId:        string;
+  schemaName:      string;
+  leadId:          string;
+  contactId:       string | null;
+  branchId:        string;
+  oldStatusId:     string | null;
+  newStatusId:     string | null;
+  changedByUserId: string | null;
+}
+
+export interface LeadAssignedJobPayload {
+  tenantId:         string;
+  schemaName:       string;
+  leadId:           string;
+  contactId:        string | null;
+  branchId:         string;
+  assignedUserId:   string;
 }

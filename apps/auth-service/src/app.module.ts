@@ -12,6 +12,7 @@ import { BosMailerModule } from '@bos/mailer';
 import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { MailModule } from './modules/mail/mail.module';
+import { DevModule } from './modules/dev/dev.module';
 
 const nodeEnv = process.env.NODE_ENV ?? 'development';
 const logLevel = process.env.LOG_LEVEL ?? 'info';
@@ -57,6 +58,7 @@ const publicKeyPath = resolve(
     UsersModule,
     AuthModule,
     MailModule,
+    ...(isProd ? [] : [DevModule]),
   ],
 })
 export class AppModule {}

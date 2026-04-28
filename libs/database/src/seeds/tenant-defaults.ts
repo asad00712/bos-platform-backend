@@ -79,9 +79,17 @@ export const CORE_TENANT_ROLES: readonly TenantRoleSeed[] = [
       'tenant:contacts:view_branch',
       'tenant:contacts:create',
       'tenant:contacts:update',
+      'tenant:contacts:delete',
       'tenant:leads:view_branch',
       'tenant:leads:create',
       'tenant:leads:update',
+      'tenant:leads:delete',
+      'tenant:leads:convert',
+      'tenant:leads:configure',
+      'tenant:tags:manage',
+      'tenant:contact_lists:manage',
+      'tenant:sources:manage',
+      'tenant:staff:round_robin',
       'tenant:deals:view_branch',
       'tenant:deals:create',
       'tenant:deals:update',
@@ -103,6 +111,10 @@ export const CORE_TENANT_ROLES: readonly TenantRoleSeed[] = [
     permissionSlugs: [
       'tenant:contacts:view_branch',
       'tenant:contacts:create',
+      'tenant:contacts:update',
+      'tenant:leads:view_branch',
+      'tenant:leads:create',
+      'tenant:leads:update',
       'tenant:appointments:view_branch',
       'tenant:appointments:create',
       'tenant:appointments:update',
@@ -166,6 +178,23 @@ export const CORE_TENANT_PERMISSIONS: readonly TenantPermissionSeed[] = [
   { slug: 'tenant:settings:manage', resource: 'settings', action: 'manage', description: 'Manage organization settings' },
   { slug: 'tenant:branches:manage', resource: 'branches', action: 'manage', description: 'Create and manage branches' },
   { slug: 'tenant:audit_logs:view', resource: 'audit_logs', action: 'view', description: 'View tenant audit logs' },
+  { slug: 'tenant:custom_fields:manage', resource: 'custom_fields', action: 'manage', description: 'Create and manage custom field definitions' },
+  // Tags
+  { slug: 'tenant:tags:manage', resource: 'tags', action: 'manage', description: 'Create, update, and delete tags' },
+  // Contact Lists
+  { slug: 'tenant:contact_lists:manage', resource: 'contact_lists', action: 'manage', description: 'Create and manage contact lists' },
+  // Sources & Statuses
+  { slug: 'tenant:sources:manage', resource: 'sources', action: 'manage', description: 'Create and manage contact sources and lead statuses' },
+  // Leads (extended)
+  { slug: 'tenant:leads:delete', resource: 'leads', action: 'delete', description: 'Delete leads' },
+  { slug: 'tenant:leads:view_all', resource: 'leads', action: 'view_all', description: 'View all leads across tenant' },
+  { slug: 'tenant:leads:view_own', resource: 'leads', action: 'view_own', description: 'View leads assigned to me' },
+  { slug: 'tenant:leads:convert', resource: 'leads', action: 'convert', description: 'Convert a lead to a contact' },
+  // Contacts (extended)
+  { slug: 'tenant:contacts:delete', resource: 'contacts', action: 'delete', description: 'Delete contacts' },
+  // Lead assignment + webhooks
+  { slug: 'tenant:leads:configure', resource: 'leads', action: 'configure', description: 'Configure lead assignment rules and webhooks' },
+  { slug: 'tenant:staff:round_robin', resource: 'staff', action: 'round_robin', description: 'Toggle staff round-robin availability' },
 ];
 
 /**

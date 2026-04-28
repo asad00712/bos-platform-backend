@@ -14,7 +14,7 @@
  */
 import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '@bos-prisma/core';
+import { PrismaClient, ModuleKey, VerticalType } from '@bos-prisma/core';
 
 const connectionString = process.env.DATABASE_URL_CORE;
 if (!connectionString) {
@@ -267,6 +267,82 @@ async function seedPlans(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Module presets — recommended modules per vertical (shown during onboarding)
+// ---------------------------------------------------------------------------
+const MODULE_PRESETS: ReadonlyArray<{
+  vertical: VerticalType;
+  modules: ModuleKey[];
+}> = [
+  { vertical: VerticalType.medical,    modules: [ModuleKey.CONTACTS, ModuleKey.APPOINTMENTS, ModuleKey.DOCUMENTS, ModuleKey.BILLING, ModuleKey.CALENDAR] },
+  { vertical: VerticalType.law,        modules: [ModuleKey.CONTACTS, ModuleKey.APPOINTMENTS, ModuleKey.DOCUMENTS, ModuleKey.DEALS_PIPELINE, ModuleKey.BILLING, ModuleKey.CALENDAR] },
+  { vertical: VerticalType.restaurant, modules: [ModuleKey.CONTACTS, ModuleKey.INVENTORY, ModuleKey.CAMPAIGNS] },
+  { vertical: VerticalType.school,     modules: [ModuleKey.CONTACTS, ModuleKey.APPOINTMENTS, ModuleKey.DOCUMENTS, ModuleKey.CAMPAIGNS] },
+  { vertical: VerticalType.gym,        modules: [ModuleKey.CONTACTS, ModuleKey.APPOINTMENTS, ModuleKey.BILLING, ModuleKey.CAMPAIGNS] },
+];
+
+// ---------------------------------------------------------------------------
+// Vertical terminology — maps generic term keys to vertical-specific labels
+// ---------------------------------------------------------------------------
+const VERTICAL_TERMINOLOGY: ReadonlyArray<{
+  vertical: VerticalType;
+  termKey: string;
+  singular: string;
+  plural: string;
+  icon?: string;
+}> = [
+  // medical
+  { vertical: VerticalType.medical, termKey: 'contact',     singular: 'Patient',      plural: 'Patients' },
+  { vertical: VerticalType.medical, termKey: 'appointment',  singular: 'Appointment',  plural: 'Appointments' },
+  { vertical: VerticalType.medical, termKey: 'deal',         singular: 'Account',      plural: 'Accounts' },
+  // law
+  { vertical: VerticalType.law,     termKey: 'contact',     singular: 'Client',       plural: 'Clients' },
+  { vertical: VerticalType.law,     termKey: 'appointment',  singular: 'Consultation', plural: 'Consultations' },
+  { vertical: VerticalType.law,     termKey: 'deal',         singular: 'Matter',       plural: 'Matters' },
+  // restaurant
+  { vertical: VerticalType.restaurant, termKey: 'contact',     singular: 'Guest',       plural: 'Guests' },
+  { vertical: VerticalType.restaurant, termKey: 'appointment',  singular: 'Reservation', plural: 'Reservations' },
+  { vertical: VerticalType.restaurant, termKey: 'deal',         singular: 'Order',       plural: 'Orders' },
+  // school
+  { vertical: VerticalType.school,  termKey: 'contact',     singular: 'Student',      plural: 'Students' },
+  { vertical: VerticalType.school,  termKey: 'appointment',  singular: 'Class',        plural: 'Classes' },
+  { vertical: VerticalType.school,  termKey: 'deal',         singular: 'Enrollment',   plural: 'Enrollments' },
+  // gym
+  { vertical: VerticalType.gym,     termKey: 'contact',     singular: 'Member',       plural: 'Members' },
+  { vertical: VerticalType.gym,     termKey: 'appointment',  singular: 'Session',      plural: 'Sessions' },
+  { vertical: VerticalType.gym,     termKey: 'deal',         singular: 'Package',      plural: 'Packages' },
+];
+
+async function seedModulePresets(): Promise<void> {
+  for (const preset of MODULE_PRESETS) {
+    await prisma.modulePreset.upsert({
+      where: { vertical: preset.vertical },
+      create: { vertical: preset.vertical, modules: preset.modules },
+      update: { modules: preset.modules },
+    });
+  }
+}
+
+async function seedVerticalTerminology(): Promise<void> {
+  for (const term of VERTICAL_TERMINOLOGY) {
+    await prisma.verticalTerminology.upsert({
+      where: { vertical_termKey: { vertical: term.vertical, termKey: term.termKey } },
+      create: {
+        vertical: term.vertical,
+        termKey: term.termKey,
+        singular: term.singular,
+        plural: term.plural,
+        icon: term.icon ?? null,
+      },
+      update: {
+        singular: term.singular,
+        plural: term.plural,
+        icon: term.icon ?? null,
+      },
+    });
+  }
+}
+
 async function main(): Promise<void> {
   console.log('[seed:core] Seeding platform permissions...');
   const permIdBySlug = await seedPermissions();
@@ -279,6 +355,14 @@ async function main(): Promise<void> {
   console.log('[seed:core] Seeding tenant plans...');
   await seedPlans();
   console.log(`[seed:core]   ${TENANT_PLANS.length} plans upserted.`);
+
+  console.log('[seed:core] Seeding module presets...');
+  await seedModulePresets();
+  console.log(`[seed:core]   ${MODULE_PRESETS.length} module presets upserted.`);
+
+  console.log('[seed:core] Seeding vertical terminology...');
+  await seedVerticalTerminology();
+  console.log(`[seed:core]   ${VERTICAL_TERMINOLOGY.length} terminology entries upserted.`);
 
   console.log('[seed:core] Done.');
 }

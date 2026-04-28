@@ -4,3 +4,4 @@ export * from './auth-response.dto';
 export * from './email-verify.dto';
 export * from './password-reset.dto';
 export * from './two-factor.dto';
+export * from './invite-accept.dto';

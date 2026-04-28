@@ -89,6 +89,30 @@ enum SessionEndReason {
   @@schema("public")
 }
 
+enum ModuleKey {
+  // Core — always on, cannot be disabled
+  CONTACTS
+  STAFF
+  BRANCHES
+  ROLES_PERMISSIONS
+
+  // Feature modules — optional
+  NOTES_ACTIVITIES
+  DOCUMENTS
+  DEALS_PIPELINE
+  APPOINTMENTS
+  CALENDAR
+  BILLING
+  INVENTORY
+  AI_LEADS
+  CAMPAIGNS
+  WORKFLOWS
+  MEDIA_LIBRARY
+  WHATSAPP
+
+  @@schema("public")
+}
+
 // =======================================================================
 // TENANT REGISTRY
 // =======================================================================
@@ -142,6 +166,14 @@ model Tenant {
   suspendedAt     DateTime?    @db.Timestamptz
   suspendedReason String?
   deletedAt       DateTime?    @db.Timestamptz
+  // Onboarding
+  onboardingCompleted Boolean  @default(false)
+  goals               String[] @default([])
+  // Business profile
+  businessPhone       String?
+  businessCity        String?
+  websiteUrl          String?
+  logoUrl             String?
   createdAt       DateTime     @default(now()) @db.Timestamptz
   updatedAt       DateTime     @updatedAt @db.Timestamptz
 
@@ -151,6 +183,7 @@ model Tenant {
   userInvites           UserInvite[]
   impersonationSessions ImpersonationSession[]
   featureFlags          FeatureFlag[]
+  modules               TenantModule[]
 
   @@index([status])
   @@index([vertical])
@@ -480,5 +513,49 @@ model FeatureFlag {
 
   @@unique([tenantId, flagKey])
   @@index([flagKey])
+  @@schema("public")
+}
+
+// =======================================================================
+// TENANT MODULES, PRESETS & TERMINOLOGY
+// =======================================================================
+
+/// Which modules are enabled for a tenant.
+model TenantModule {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String    @db.Uuid
+  moduleKey ModuleKey
+  isEnabled Boolean   @default(true)
+  config    Json      @default("{}")
+  enabledAt DateTime  @default(now()) @db.Timestamptz
+  enabledBy String?   @db.Uuid
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, moduleKey])
+  @@index([tenantId])
+  @@schema("public")
+}
+
+/// Seeded — recommended modules per vertical shown during onboarding.
+model ModulePreset {
+  id       String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vertical VerticalType @unique
+  modules  ModuleKey[]
+
+  @@schema("public")
+}
+
+/// Seeded — maps generic term keys to vertical-specific display names.
+/// e.g. vertical=medical, termKey=contact → singular=Patient, plural=Patients
+model VerticalTerminology {
+  id       String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vertical VerticalType
+  termKey  String       // 'contact' | 'appointment' | 'deal'
+  singular String
+  plural   String
+  icon     String?
+
+  @@unique([vertical, termKey])
   @@schema("public")
 }

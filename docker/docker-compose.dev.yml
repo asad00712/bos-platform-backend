@@ -2,6 +2,31 @@ name: bos-dev
 
 services:
   # ---------------------------------------------------------------------------
+  # Nginx — API Gateway
+  # Single entry point for all services on port 80 (dev).
+  # Routes: /auth/** → auth-service:3001 | /** → crm-core:3002
+  # Services run on the host machine (pnpm run start:*:dev).
+  # extra_hosts ensures host.docker.internal resolves on Linux too.
+  # ---------------------------------------------------------------------------
+  nginx-gateway:
+    image: nginx:1.27-alpine
+    container_name: bos-nginx-gateway
+    restart: unless-stopped
+    ports:
+      - '80:80'
+    volumes:
+      - ./nginx/dev.conf:/etc/nginx/conf.d/default.conf:ro
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost/gateway/health']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - bos-net
+
+  # ---------------------------------------------------------------------------
   # Redis 1 — Operational
   # Handles: JWT revocation, rate limiting, sessions, pub/sub, cache
   # Persistence: AOF (appendonly) — data must survive restarts
@@ -60,8 +85,8 @@ services:
   # ---------------------------------------------------------------------------
   # Redis 3 — Heavy Queue
   # Handles: campaigns, workflows, bulk imports
-  # Persistence: RDB only (save 60 1000) — acceptable to lose a few jobs on crash
-  # Eviction: allkeys-lru — can shed oldest keys under memory pressure
+  # Persistence: RDB (save 60 1000) — periodic snapshot
+  # Eviction: noeviction — BullMQ requires this; never silently drop queued jobs
   # ---------------------------------------------------------------------------
   redis-queue-heavy:
     image: redis:7-alpine
@@ -73,7 +98,7 @@ services:
       redis-server
       --save 60 1000
       --maxmemory 2gb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
     volumes:
       - redis-queue-heavy-data:/data
     healthcheck:

@@ -109,8 +109,9 @@ export class EmailVerifyService {
     // irreversible, so we do it after all DB writes succeed.
     try {
       await this.tenantSchemaManager.provisionSchema({
-        schemaName: tenant.schemaName,
-        vertical: tenant.vertical ?? undefined,
+        schemaName:   tenant.schemaName,
+        vertical:     tenant.vertical ?? undefined,
+        ownerUserId:  user.id,
       });
       await this.prisma.tenant.update({
         where: { id: tenant.id },
@@ -121,6 +122,75 @@ export class EmailVerifyService {
       // Schema provisioning failed — update tenant to error state so ops can retry.
       // User is still activated; they can try again via support.
       this.logger.error(`Schema provisioning failed for tenant ${tenant.id}`, err);
+      await this.prisma.tenant.update({
+        where: { id: tenant.id },
+        data: { status: TenantStatus.SUSPENDED },
+      });
+      throw err;
+    }
+
+    return { userId: user.id, tenantId: tenant.id };
+  }
+
+  /**
+   * Development-only shortcut: verifies a user by email without a token.
+   * Runs the exact same activation + schema-provisioning logic as execute().
+   *
+   * NEVER call this from production code paths — it is exposed only by DevController
+   * which is not registered when NODE_ENV=production.
+   */
+  async bypassVerify(email: string): Promise<VerifyEmailResult> {
+    const user = await this.prisma.user.findUnique({
+      where: { email: email.trim().toLowerCase() },
+    });
+    if (!user) {
+      throw new InvalidTokenException('No user found with that email');
+    }
+    if (user.emailVerified && user.status === UserStatus.ACTIVE) {
+      throw new UserAlreadyVerifiedException();
+    }
+
+    const membership = await this.prisma.tenantMembership.findFirst({
+      where: { userId: user.id },
+      include: { tenant: true },
+    });
+    if (!membership) {
+      throw new InvalidTokenException('No tenant membership found for this user');
+    }
+
+    const { tenant } = membership;
+
+    await this.prisma.$transaction(async (tx) => {
+      // Expire any pending tokens so they can't be used after bypass
+      await tx.emailVerification.updateMany({
+        where: { userId: user.id, verifiedAt: null },
+        data: { verifiedAt: new Date() },
+      });
+
+      await tx.user.update({
+        where: { id: user.id },
+        data: { emailVerified: true, status: UserStatus.ACTIVE },
+      });
+
+      await tx.tenantMembership.update({
+        where: { id: membership.id },
+        data: { status: TenantMembershipStatus.ACTIVE },
+      });
+    });
+
+    try {
+      await this.tenantSchemaManager.provisionSchema({
+        schemaName:   tenant.schemaName,
+        vertical:     tenant.vertical ?? undefined,
+        ownerUserId:  user.id,
+      });
+      await this.prisma.tenant.update({
+        where: { id: tenant.id },
+        data: { status: TenantStatus.ACTIVE },
+      });
+      this.logger.log(`[DEV] Tenant schema provisioned: ${tenant.schemaName}`);
+    } catch (err: unknown) {
+      this.logger.error(`[DEV] Schema provisioning failed for tenant ${tenant.id}`, err);
       await this.prisma.tenant.update({
         where: { id: tenant.id },
         data: { status: TenantStatus.SUSPENDED },

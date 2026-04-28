@@ -4,6 +4,7 @@ import { PasswordHasherService } from '@bos/security';
 import {
   REDIS_KEY_PREFIX,
   SessionScope,
+  TenantMembershipStatus,
   UserStatus,
 } from '@bos/common';
 import {
@@ -14,6 +15,7 @@ import {
   UserSuspendedException,
 } from '@bos/errors';
 import { RedisService } from '@bos/redis';
+import { CorePrismaService } from '@bos/database';
 import type { User } from '@bos-prisma/core';
 import { UsersService } from '../../users/users.service';
 import { SessionsRepository } from '../repositories/sessions.repository';
@@ -57,6 +59,7 @@ export class LoginService {
     private readonly refreshTokens: RefreshTokensRepository,
     private readonly tokenIssuer: TokenIssuerService,
     private readonly redis: RedisService,
+    private readonly corePrisma: CorePrismaService,
     config: ConfigService,
   ) {
     this.maxAttempts = config.get<number>('AUTH_LOCKOUT_MAX_ATTEMPTS', 10);
@@ -103,9 +106,20 @@ export class LoginService {
     // Password correct → clear lockout counter
     await this.redis.client.del(lockoutKey);
 
+    // Resolve tenant context — required for tenant-scoped JWT claims.
+    const membership = await this.corePrisma.tenantMembership.findFirst({
+      where: { userId: user.id, status: TenantMembershipStatus.ACTIVE },
+      select: { tenantId: true },
+    });
+    if (!membership) {
+      // User exists but has no active tenant membership (invited-only, suspended, etc.)
+      throw new UserInactiveException();
+    }
+
     const session = await this.sessions.create({
-      user: { connect: { id: user.id } },
-      scope: SessionScope.TENANT,
+      user:    { connect: { id: user.id } },
+      tenant:  { connect: { id: membership.tenantId } },
+      scope:   SessionScope.TENANT,
       ipAddress: ctx.ipAddress ?? undefined,
       userAgent: ctx.userAgent ?? undefined,
     });
@@ -121,14 +135,14 @@ export class LoginService {
     }
 
     const access = await this.tokenIssuer.issueAccessToken({
-      sub: user.id,
-      scope: 'tenant',
-      sessionId: session.id,
-      tenantId: null,
-      activeBranchId: null,
+      sub:                user.id,
+      scope:              'tenant',
+      sessionId:          session.id,
+      tenantId:           membership.tenantId,
+      activeBranchId:     null,
       accessibleBranchIds: [],
       hasTenantWideAccess: false,
-      roles: [],
+      roles:              [],
       v: 1,
     });
 
